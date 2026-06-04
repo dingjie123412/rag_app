@@ -3,7 +3,7 @@ import os
 import datetime
 from datetime import datetime as dt
 import re
-import tempfile
+
 
 # 安全配置编码（兼容命令行 + Streamlit 双模式）
 def setup_encoding():
@@ -21,6 +21,7 @@ def setup_encoding():
                 pass
     except Exception as e:
         pass
+
 
 setup_encoding()
 
@@ -46,6 +47,7 @@ except ImportError:
     pd = None
 from typing import TypedDict, Sequence, List, Optional
 import numpy as np
+from dotenv import load_dotenv
 
 import streamlit as st
 
@@ -319,6 +321,7 @@ def load_config():
     # 尝试从 Streamlit Secrets 加载（部署到 Streamlit Cloud 时使用）
     try:
         if hasattr(st, 'secrets') and 'QWEN_API_KEY' in st.secrets:
+            config['DOC_PATH'] = st.secrets.get('DOC_PATH', '')
             config['QWEN_API_KEY'] = st.secrets['QWEN_API_KEY']
             config['QWEN_API_BASE'] = st.secrets['QWEN_API_BASE']
             config['MODEL_NAME'] = st.secrets.get('MODEL_NAME', 'qwen-plus')
@@ -333,14 +336,14 @@ def load_config():
     
     # 尝试从 .env 文件加载（本地开发时使用）
     try:
-        from dotenv import load_dotenv
         load_dotenv()
-        config['QWEN_API_KEY'] = os.getenv('QWEN_API_KEY', '')
-        config['QWEN_API_BASE'] = os.getenv('QWEN_API_BASE', '')
-        config['MODEL_NAME'] = os.getenv('MODEL_NAME', 'qwen-plus')
-        config['EMBEDDING_API_KEY'] = os.getenv('EMBEDDING_API_KEY', '')
-        config['EMBEDDING_API_URL'] = os.getenv('EMBEDDING_API_URL', '')
-        config['EMBEDDING_MODEL'] = os.getenv('EMBEDDING_MODEL', 'text-embedding-v2')
+        config['DOC_PATH'] = os.getenv("DOC_PATH", "")
+        config['QWEN_API_KEY'] = os.getenv("QWEN_API_KEY", "")
+        config['QWEN_API_BASE'] = os.getenv("QWEN_API_BASE", "")
+        config['MODEL_NAME'] = os.getenv("MODEL_NAME", "qwen-plus")
+        config['EMBEDDING_API_KEY'] = os.getenv("EMBEDDING_API_KEY", "")
+        config['EMBEDDING_API_URL'] = os.getenv("EMBEDDING_API_URL", "")
+        config['EMBEDDING_MODEL'] = os.getenv("EMBEDDING_MODEL", "text-embedding-v2")
         loaded_from = '.env 文件'
         print("[INFO] 配置已从 .env 文件加载")
         return config, loaded_from
@@ -351,12 +354,15 @@ def load_config():
 
 # 加载配置
 config, config_source = load_config()
-QWEN_API_KEY = config.get('QWEN_API_KEY', '')
-QWEN_API_BASE = config.get('QWEN_API_BASE', '')
-MODEL_NAME = config.get('MODEL_NAME', 'qwen-plus')
-EMBEDDING_API_KEY = config.get('EMBEDDING_API_KEY', '')
-EMBEDDING_API_URL = config.get('EMBEDDING_API_URL', '')
-EMBEDDING_MODEL = config.get('EMBEDDING_MODEL', 'text-embedding-v2')
+
+# 全局配置
+DOC_PATH = config.get('DOC_PATH', "")
+QWEN_API_KEY = config.get('QWEN_API_KEY', "")
+QWEN_API_BASE = config.get('QWEN_API_BASE', "")
+MODEL_NAME = config.get('MODEL_NAME', "qwen-plus")
+EMBEDDING_API_KEY = config.get('EMBEDDING_API_KEY', "")
+EMBEDDING_API_URL = config.get('EMBEDDING_API_URL', "")
+EMBEDDING_MODEL = config.get('EMBEDDING_MODEL', "text-embedding-v2")
 
 # 配置验证函数
 def validate_config() -> tuple:
@@ -830,6 +836,8 @@ def calculator(expression: str) -> str:
         return f"计算错误：{str(e)}"
     except Exception as e:
         return f"计算失败：{str(e)}"
+
+
 
 
 @tool
@@ -1477,30 +1485,52 @@ def reconstruct_query(question: str, history: List[dict]) -> str:
     return question
 
 
-def setup_rag_from_files(uploaded_files, chunk_size: int = 2000, chunk_overlap: int = 300, 
-                         progress_callback=None, header_config: dict = None):
-    """从上传的文件初始化 RAG 系统"""
-    if not uploaded_files:
-        raise ValueError("错误：没有上传任何文件")
+def setup_rag(doc_path: str, chunk_size: int = 2000, chunk_overlap: int = 300, progress_callback=None,
+              header_config: dict = None):
+    """初始化 RAG 系统，支持进度回调"""
+    if not doc_path:
+        raise ValueError("错误：文档路径未设置")
+
+    if os.path.isfile(doc_path):
+        doc_files = [doc_path]
+    elif os.path.isdir(doc_path):
+        doc_files = []
+        skipped_files = []
+        for root, _, files in os.walk(doc_path):
+            for file in files:
+                if file.startswith("~$") or file.startswith("."):
+                    skipped_files.append(file)
+                    continue
+                lower_name = file.lower()
+                if lower_name.endswith(".docx"):
+                    doc_files.append(os.path.join(root, file))
+                elif lower_name.endswith(".pdf"):
+                    doc_files.append(os.path.join(root, file))
+                elif lower_name.endswith(".xlsx") or lower_name.endswith(".xls"):
+                    doc_files.append(os.path.join(root, file))
+
+        if skipped_files and progress_callback:
+            progress_callback(5, f"跳过 {len(skipped_files)} 个临时/隐藏文件")
+    else:
+        raise ValueError(f"路径无效: {doc_path}")
+
+    if not doc_files:
+        raise ValueError("未找到docx/PDF/Excel文档，请检查路径")
+
+    if progress_callback:
+        progress_callback(10, f"发现 {len(doc_files)} 个文档")
 
     all_segments = []
-    total_files = len(uploaded_files)
-    
-    for idx, uploaded_file in enumerate(uploaded_files):
-        fname = uploaded_file.name
-        
-        # 创建临时文件
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(fname)[1]) as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            tmp_path = tmp_file.name
-        
+    total_files = len(doc_files)
+    for idx, file_path in enumerate(doc_files):
+        fname = os.path.basename(file_path)
         try:
-            if fname.lower().endswith(".docx"):
-                seg = read_docx(tmp_path)
-            elif fname.lower().endswith(".pdf"):
-                seg = read_pdf(tmp_path)
-            elif fname.lower().endswith(".xlsx") or fname.lower().endswith(".xls"):
-                seg = read_excel(tmp_path, interactive=False, header_config=header_config)
+            if file_path.lower().endswith(".docx"):
+                seg = read_docx(file_path)
+            elif file_path.lower().endswith(".pdf"):
+                seg = read_pdf(file_path)
+            elif file_path.lower().endswith(".xlsx") or file_path.lower().endswith(".xls"):
+                seg = read_excel(file_path, interactive=False, header_config=header_config)
             else:
                 continue
             all_segments.extend(seg)
@@ -1508,9 +1538,6 @@ def setup_rag_from_files(uploaded_files, chunk_size: int = 2000, chunk_overlap: 
             print(f"     [ERROR] {fname} 读取失败：{e}")
             if progress_callback:
                 progress_callback(10 + int((idx + 1) / total_files * 30), f"⚠️ {fname} 读取失败，跳过")
-        finally:
-            # 删除临时文件
-            os.unlink(tmp_path)
 
         if progress_callback:
             progress = 10 + int((idx + 1) / total_files * 30)
@@ -1577,13 +1604,14 @@ def setup_rag_from_files(uploaded_files, chunk_size: int = 2000, chunk_overlap: 
     return {
         "chunks": chunks,
         "chunk_embeddings": chunk_embeddings,
-        "doc_files": [f.name for f in uploaded_files],
+        "doc_files": doc_files,
         "total_chars": total_chars,
         "num_chunks": len(chunks)
     }
 
 
 def main():
+    # st.set_page_config(page_title="RAG 知识库问答系统", page_icon="💬", layout="wide")
     st.set_page_config(
         page_title="RAG 知识库问答系统",
         page_icon="🤖",
@@ -1615,33 +1643,6 @@ section[data-testid="stSidebar"] > div:first-child  {
 </style>
 """, unsafe_allow_html=True)
     
-    # 初始化会话状态
-    session_defaults = {
-        "messages": [],
-        "rag_initialized": False,
-        "chunks": [],
-        "chunk_embeddings": None,
-        "use_semantic_search": True,
-        "search_mode": "semantic",
-        "excel_header_mode": "默认",
-        "doc_files": [],
-        "total_chars": 0,
-        "num_chunks": 0,
-        "header_config": {},
-        "show_source_formats": False,
-        "agent_executor": None,
-        "uploaded_files": [],
-        "temperature": 0.1,
-        "top_k": 5,
-        "chunk_size": 2000,
-        "chunk_overlap": 300,
-        "excel_sheets": {}  # 新增：存储Excel工作表信息
-    }
-    
-    for key, default_value in session_defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = default_value
-
     # 验证配置
     config_valid, missing_configs, config_source = validate_config()
 
@@ -1680,6 +1681,33 @@ section[data-testid="stSidebar"] > div:first-child  {
         """)
         return
 
+    # 初始化会话状态
+    session_defaults = {
+        "messages": [],
+        "rag_initialized": False,
+        "chunks": [],
+        "chunk_embeddings": None,
+        "use_semantic_search": True,
+        "search_mode": "semantic",
+        "excel_header_mode": "默认",
+        "doc_files": [],
+        "total_chars": 0,
+        "num_chunks": 0,
+        "doc_path": DOC_PATH,
+        "header_config": {},
+        "show_source_formats": False,
+        "agent_executor": None,
+        "temperature": 0.1,
+        "top_k": 5,
+        "chunk_size": 2000,
+        "chunk_overlap": 300,
+        "excel_sheets": {}
+    }
+    
+    for key, default_value in session_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
     with st.sidebar:
         st.title("📚 知识库配置")
         
@@ -1689,20 +1717,15 @@ section[data-testid="stSidebar"] > div:first-child  {
         else:
             st.warning("⚠️ 配置来源未知")
 
-        # 文件上传区域
-        st.subheader("上传知识库文件")
-        uploaded_files = st.file_uploader(
-            "选择文档文件",
-            type=["docx", "pdf", "xlsx", "xls"],
-            accept_multiple_files=True,
-            help="支持上传多个文档文件，包括 Word、PDF 和 Excel"
+        st.subheader("知识库路径")
+        new_doc_path = st.text_input(
+            "文档路径",
+            value=st.session_state.doc_path,
+            placeholder="请输入文档文件夹或文件路径"
         )
-        
-        if uploaded_files:
-            st.session_state.uploaded_files = uploaded_files
-            st.success(f"已选择 {len(uploaded_files)} 个文件")
-            for f in uploaded_files:
-                st.write(f"📄 {f.name}")
+        if st.button("保存路径"):
+            st.session_state.doc_path = new_doc_path
+            st.success("路径已保存")
 
         st.markdown("---")
 
@@ -1716,7 +1739,7 @@ section[data-testid="stSidebar"] > div:first-child  {
 
             with st.expander("📋 文件列表"):
                 for idx, doc in enumerate(st.session_state.doc_files, 1):
-                    st.write(f"{idx}. {doc}")
+                    st.write(f"{idx}. {os.path.basename(doc)}")
         else:
             st.warning("⚠️ 知识库未初始化")
 
@@ -1730,9 +1753,19 @@ section[data-testid="stSidebar"] > div:first-child  {
         )
 
         # 如果是自定义模式，先显示Excel配置界面
-        if st.session_state.excel_header_mode == "自定义" and st.session_state.uploaded_files:
-            excel_files = [f for f in st.session_state.uploaded_files 
-                          if f.name.lower().endswith((".xlsx", ".xls"))]
+        if st.session_state.excel_header_mode == "自定义":
+            # 先获取Excel文件列表
+            excel_files = []
+            if os.path.exists(st.session_state.doc_path):
+                if os.path.isdir(st.session_state.doc_path):
+                    for root, _, files in os.walk(st.session_state.doc_path):
+                        for file in files:
+                            if not file.startswith("~$") and (
+                                    file.lower().endswith(".xlsx") or file.lower().endswith(".xls")):
+                                excel_files.append(os.path.join(root, file))
+                elif st.session_state.doc_path.lower().endswith(".xlsx") or st.session_state.doc_path.lower().endswith(
+                        ".xls"):
+                    excel_files = [st.session_state.doc_path]
             
             if excel_files:
                 st.subheader("Excel 表头配置")
@@ -1744,20 +1777,16 @@ section[data-testid="stSidebar"] > div:first-child  {
                     for excel_file in excel_files:
                         try:
                             from openpyxl import load_workbook
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
-                                tmp_file.write(excel_file.read())
-                                tmp_path = tmp_file.name
-                            wb = load_workbook(filename=tmp_path, read_only=True)
-                            excel_sheets[excel_file.name] = wb.sheetnames
+                            wb = load_workbook(filename=excel_file, read_only=True)
+                            excel_sheets[excel_file] = wb.sheetnames
                             wb.close()
-                            os.unlink(tmp_path)
                         except Exception as e:
                             print(f"读取Excel文件失败: {e}")
                     st.session_state.excel_sheets = excel_sheets
                 
                 # 配置每个工作表
-                for excel_file_name, sheets in st.session_state.excel_sheets.items():
-                    st.write(f"**文件: {excel_file_name}**")
+                for excel_file, sheets in st.session_state.excel_sheets.items():
+                    st.write(f"**文件: {os.path.basename(excel_file)}**")
                     for sheet in sheets:
                         header_type = st.selectbox(
                             f"{sheet} - 表头类型",
@@ -1804,16 +1833,45 @@ section[data-testid="stSidebar"] > div:first-child  {
                                 'rows': 0
                             }
             else:
-                st.info("当前没有上传Excel文件，无需配置")
+                st.info("当前路径下没有Excel文件，无需配置")
 
         st.markdown("---")
 
         st.subheader("操作")
 
-        if st.button("🔄 加载知识库"):
-            if not st.session_state.uploaded_files:
-                st.error("请先上传知识库文件")
+        if st.button("🔄 重新加载知识库"):
+            if not st.session_state.doc_path:
+                st.error("请先设置文档路径")
             else:
+                # 获取Excel文件列表
+                excel_files = []
+                if os.path.isdir(st.session_state.doc_path):
+                    for root, _, files in os.walk(st.session_state.doc_path):
+                        for file in files:
+                            if not file.startswith("~$") and (
+                                    file.lower().endswith(".xlsx") or file.lower().endswith(".xls")):
+                                excel_files.append(os.path.join(root, file))
+                elif st.session_state.doc_path.lower().endswith(".xlsx") or st.session_state.doc_path.lower().endswith(
+                        ".xls"):
+                    excel_files = [st.session_state.doc_path]
+
+                # 如果是默认模式，自动生成配置
+                if st.session_state.excel_header_mode == "默认" and excel_files:
+                    st.session_state.header_config = {}
+                    for excel_file in excel_files:
+                        try:
+                            from openpyxl import load_workbook
+                            wb = load_workbook(filename=excel_file, read_only=True)
+                            for sheet_name in wb.sheetnames:
+                                st.session_state.header_config[sheet_name] = {
+                                    'type': 1,
+                                    'rows': 0
+                                }
+                            wb.close()
+                        except Exception as e:
+                            print(f"读取Excel文件失败: {e}")
+                
+                # 直接调用加载
                 perform_load()
 
         if st.button("🗑️ 清空对话历史"):
@@ -1888,8 +1946,10 @@ section[data-testid="stSidebar"] > div:first-child  {
         st.session_state.use_semantic_search = (st.session_state.search_mode == "semantic")
 
     # 主聊天界面
+    # st.title("💬 RAG 知识库问答系统")
+
     if not st.session_state.rag_initialized:
-        st.info("请先在侧边栏上传知识库文件并加载")
+        st.info("请先在侧边栏设置文档路径并加载知识库")
         return
 
     if not st.session_state.messages:
@@ -1984,8 +2044,8 @@ def perform_load():
             status_text.text(message)
 
         try:
-            result = setup_rag_from_files(
-                st.session_state.uploaded_files,
+            result = setup_rag(
+                st.session_state.doc_path,
                 chunk_size=st.session_state.chunk_size,
                 chunk_overlap=st.session_state.chunk_overlap,
                 progress_callback=progress_callback,
