@@ -1,0 +1,42 @@
+# 敏感配置文件
+.env
+.env.local
+.env.*.local
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境
+venv/
+.env/
+.venv/
+env/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+*.log
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 构建产物
+*.egg-info/
+dist/
+build/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Streamlit 配置（如果使用本地配置）
+.streamlit/secrets.toml

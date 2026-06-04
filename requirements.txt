@@ -1,0 +1,12 @@
+streamlit>=1.32.0
+langchain>=0.1.10
+langchain-openai>=0.1.0
+langchain-core>=0.1.28
+langchain-classic>=0.1.10
+requests>=2.31.0
+python-dotenv>=1.0.0
+numpy>=1.26.0
+PyPDF2>=3.0.1
+python-docx>=1.1.0
+openpyxl>=3.1.2
+pandas>=2.1.0
