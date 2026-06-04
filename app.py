@@ -1717,15 +1717,61 @@ section[data-testid="stSidebar"] > div:first-child  {
         else:
             st.warning("⚠️ 配置来源未知")
 
-        st.subheader("知识库路径")
-        new_doc_path = st.text_input(
-            "文档路径",
-            value=st.session_state.doc_path,
-            placeholder="请输入文档文件夹或文件路径"
+        st.subheader("上传知识库文件")
+        
+        # 上传知识库压缩包（仅支持 ZIP 格式）
+        uploaded_zip = st.file_uploader(
+            "上传知识库压缩包 (.zip)",
+            type=["zip"],
+            help="上传包含知识库文档的 ZIP 压缩包，支持 Word、PDF、Excel 文件"
         )
-        if st.button("保存路径"):
-            st.session_state.doc_path = new_doc_path
-            st.success("路径已保存")
+        
+        if uploaded_zip:
+            # 保存上传的压缩包到临时目录（不使用 with 语句，避免自动删除）
+            import tempfile
+            
+            # 创建临时目录（手动管理生命周期）
+            temp_dir = tempfile.mkdtemp()
+            
+            try:
+                # 解压压缩包
+                zip_path = os.path.join(temp_dir, uploaded_zip.name)
+                with open(zip_path, "wb") as f:
+                    f.write(uploaded_zip.read())
+                
+                # 解压到临时目录
+                extract_dir = os.path.join(temp_dir, "extracted")
+                os.makedirs(extract_dir, exist_ok=True)
+                
+                import zipfile
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
+                
+                # 保存解压路径到会话状态
+                st.session_state.doc_path = extract_dir
+                
+                # 统计文件数量
+                total_files = 0
+                file_list = []
+                for root, dirs, files in os.walk(extract_dir):
+                    for file in files:
+                        total_files += 1
+                        rel_path = os.path.relpath(os.path.join(root, file), extract_dir)
+                        file_list.append(rel_path)
+                
+                st.success(f"✅ 压缩包已解压，包含 {total_files} 个文件")
+                
+                # 显示解压后的文件列表
+                if file_list:
+                    with st.expander("📋 解压文件列表"):
+                        for f in file_list:
+                            st.write(f"📄 {f}")
+            
+            except Exception as e:
+                st.error(f"解压失败: {str(e)}")
+                # 清理临时目录
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
         st.markdown("---")
 
